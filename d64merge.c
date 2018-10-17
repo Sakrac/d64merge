@@ -70,6 +70,10 @@ u8* d64Merge( u8* data, u8* dir )
 	// copy track 18 from dir to out
 	memcpy( out + d64Sector( 18, 1 ), dir + d64Sector( 18, 1), d64Sector( 19, 0 ) - d64Sector( 18, 1 ) );
 
+	// use the BAM for the directory sector from the directory disk
+	int BAMOffs = d64Sector( 18, 0 ) + ( 18 - 1 ) * 4 + 4;
+	memcpy( out + BAMOffs, dir + BAMOffs, 4 );
+
 	// copy file type, disk location, file name prefix from the data disk
 	int currFile = 0;
 	u8* data_curr = data + d64Sector( 18, 0 );
