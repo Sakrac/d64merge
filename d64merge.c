@@ -4,6 +4,7 @@
 #include <string.h>
 
 #define D64_SIZE 174848
+#define D64_FILE_ENTRY_SIZE 32
 typedef unsigned char u8;
 
 static const int TrackOffsets[] = {
@@ -25,7 +26,16 @@ int d64Sector( u8 track, u8 sector )
 }
 
 
-int fileCount( u8* d64 )
+void printFile( u8* file )
+{
+	u8 type = file[ 2 ];	
+	char name[ 17 ];
+	for( int n = 0; n<16; ++n ) { name[ n ] = file[ n + 5 ] == 0xa0 ? '.' : file[ n + 5 ]; }
+	name[ 16 ] = 0;
+	printf( "\"%s\" %s\n", name, FileTypes[ type & 7 ] );
+}
+
+int fileCount( u8* d64, int list )
 {
 	int numFiles = 0;
 	u8* curr = d64 + d64Sector( 18, 0 );
@@ -33,29 +43,27 @@ int fileCount( u8* d64 )
 		curr = d64 + d64Sector( curr[0], curr[1] );
 		u8* file = curr;
 		while( ( file - curr ) < 256 ) {
-			u8 type = file[ 2 ];	// type == 0 => "deleted"
-			if( type ) {
-/*				char name[17];
-				for( int n=0; n<16; ++n ) { name[n] = file[n + 5] == 0xa0 ? '.' : file[n+5]; }
-				name[ 16 ] = 0;
-				printf( "file %03d: \"%s\" %s\n", numFiles, name, FileTypes[type&7] );
-*/				++numFiles;
+			if( file[2] ) { // type == 0 => "deleted"
+				if( list ) { printFile( file ); }
+				++numFiles;
 			}
-			file += 32;
+			file += D64_FILE_ENTRY_SIZE;
 		}
 	}
 	return numFiles;
 }
 
-u8* d64Merge( u8* data, u8* dir )
+u8* d64Merge( u8* data, u8* dir, int skip, int list, int append )
 {
-	int files_in_data = fileCount(data);
-	int files_in_dir = fileCount(dir);
+	if( list ) { printf( "\nFILES IN DATA:\n" ); }
+	int files_in_data = fileCount(data, list);
+	if( list ) { printf( "\nFILES IN DIR:\n" ); }
+	int files_in_dir = fileCount(dir, list);
 
-	printf("files in data d64: %d\nfiles in dir d64: %d\n", files_in_data, files_in_dir );
+	printf("Number of files in data d64: %d\nNumber of files in dir d64: %d\n", files_in_data, files_in_dir );
 
-	if( files_in_data > files_in_dir ) {
-		printf("Error: files in data d64 exceeds the number of files in the dir art d64.\n");
+	if( ( files_in_data + skip ) > files_in_dir ) {
+		printf("Error: files in data d64 plus files to skip exceeds the number of files in the dir art d64.\n");
 		return 0;
 	}
 
@@ -67,6 +75,9 @@ u8* d64Merge( u8* data, u8* dir )
 	memcpy( out, data, D64_SIZE );
 
 	// the folder structure comes from the dir d64
+	// copy disk name and dos type
+	int diskNameOffset = d64Sector( 18, 0 ) + 0x90;
+	memcpy( out + diskNameOffset, dir + diskNameOffset, 0xab-0x90 );
 	// copy track 18 from dir to out
 	memcpy( out + d64Sector( 18, 1 ), dir + d64Sector( 18, 1), d64Sector( 19, 0 ) - d64Sector( 18, 1 ) );
 
@@ -81,38 +92,62 @@ u8* d64Merge( u8* data, u8* dir )
 	u8* dir_curr = dir + d64Sector( 18, 0 );
 	u8* dir_file = 0;
 
+	int data_files_left = files_in_data;
+
+	if( list ) { printf( "\nFILES IN OUTPUT D64:\n" ); }
 	// only update files from the data directory
-	while( currFile < files_in_data ) {
-		for(;;) { // grab the next data file
-			if( !data_file || ( data_file - data_curr ) >= 0x100 ) {
-				data_curr = data + d64Sector( data_curr[ 0 ], data_curr[ 1 ] );
-				data_file = data_curr;
-				break;
+	int first = 1;
+	while( currFile < files_in_dir ) {
+		if( data_files_left ) {
+			if( !skip || first ) {
+				for(;;) { // grab the next data file
+					if( !data_file || ( data_file - data_curr ) >= 0x100 ) {
+						data_curr = data + d64Sector( data_curr[ 0 ], data_curr[ 1 ] );
+						data_file = data_curr;
+						break;
+					}
+					data_file += D64_FILE_ENTRY_SIZE;
+					if( (data_file - data_curr ) < 0x100 && data_file[2] ) { break; }
+				}
+				data_files_left--;
 			}
-			data_file += 32;
-			if( (data_file - data_curr ) < 0x100 && data_file[2] ) { break; }
-		}
+		} else { data_file = 0; }
 		for(;;) { // grab the next directory file
 			if( !dir_file || ( dir_file - dir_curr ) >= 0x100 ) {
 				dir_curr = dir + d64Sector( dir_curr[ 0 ], dir_curr[ 1 ] );
 				dir_file = dir_curr;
 				break;
 			}
-			dir_file += 32;
+			dir_file += D64_FILE_ENTRY_SIZE;
 			if( ( dir_file - dir_curr ) < 0x100 && dir_file[ 2 ] ) { break; }
 		}
 		// the out file is relative to the dir d64
 		u8* out_file = out + ( dir_file - dir );
 
-		// copy the file info from the data file into the out file
-		memcpy( out_file+2, data_file+2, 3 );
-		memcpy( out_file + 21, data_file + 21, 11 );
+		if( data_file && ( !skip || first ) ) {
+			if( append ) {
+				int shift = 0;
+				for( int i=0; i<16 && data_file[5+i]!=0xa0 && (dir_file[20-i]&0x7f)==0x20; i++ ) { shift++; }
+				if( shift && shift<16 ) { memcpy( out_file + 5 + shift, dir_file + 5, 16-shift ); }
+			}
+			// copy the file info from the data file into the out file
+			memcpy( out_file+2, data_file+2, 3 );
+			memcpy( out_file + 21, data_file + 21, 11 );
 
-		// first filename entirely from dir art disk
-		if(currFile) {
-			for(int i = 5; i<21 && data_file[i] != 0xa0; ++i ) { out_file[i] = data_file[i]; }
+			// first filename entirely from dir art disk
+			if(currFile && !first) {
+				for(int i = 5; i<21 && data_file[i] != 0xa0; ++i ) { out_file[i] = data_file[i]; }
+			}
+		} else {
+			out_file[2] = 0x80; // make sure remaining files are all DEL
+			out_file[3] = 0x00;
+			out_file[4] = 0x00;
+			memset( out_file + 21, 0, 11 );
 		}
+		if( list ) { printFile( out_file ); }
 		++currFile;
+		if( skip ) { --skip; }
+		first = 0;
 	}
 	return out;
 }
@@ -148,17 +183,33 @@ int save( void* buf, const char* filename, size_t size )
 
 int main( int argc, char* argv[] )
 {
-	if( argc <= 3 )
+	// parse command line arguments
+	int skip = 0, list = 0, append = 0;
+	const char *data = 0, *dir = 0, *out = 0;
+	for( int i = 1; i < argc; ++i ) {
+		if( argv[ i ][ 0 ] == '-' ) {
+			const char* cmd = argv[i]+1;
+			const char* eq = strchr( cmd, '=' );
+			size_t len = eq ? ( eq - cmd ) : strlen( cmd );
+			if( _strnicmp( "skip", cmd, len ) == 0 && eq ) { skip = atoi(eq+1); }
+			else if( _strnicmp( "list", cmd, len ) == 0 ) { list = 1; }
+			else if( _strnicmp( "append", cmd, len ) == 0 ) { append = eq ? atoi(eq+1) : 1; }
+		}
+		else if( !data ) { data = argv[i]; }
+		else if( !dir ) { dir = argv[i]; }
+		else if( !out ) { out = argv[i]; }
+		else {
+			printf( "Too many file arguments passed in\n" );
+			return 1;
+		}
+	}
+
+	if( !data || !dir || !out )
 	{
-		printf("usage:\n%s <d64 data> <d64 dir> <d64 out>\n", argv[0] );
+		printf("usage:\n%s [-skip=x] <d64 data> <d64 dir> <d64 out>\n", argv[0] );
 		printf("Notes:\n* .d64 files all need different names\n* .d64 dir should have more files than d64 data.\n");
 		return 0;
 	}
-
-	const char* data = argv[1];
-	const char* dir = argv[2];
-	const char* out = argv[3];
-
 
 	printf("Files names from \"%s\" will be padded with corresponding file names from\n \"%s\"\n and saved out as a new disk named\n \"%s\".\n",
 			data, dir, out );
@@ -171,11 +222,22 @@ int main( int argc, char* argv[] )
 
 	int ret = 0;
 
-	if( data_d64 && dir_d64 && data_size == D64_SIZE && dir_size == D64_SIZE )
-	{
-		out_d64 = d64Merge( data_d64, dir_d64 );
+	if( data_d64 && dir_d64 && data_size == D64_SIZE && dir_size == D64_SIZE ) {
+		out_d64 = d64Merge( data_d64, dir_d64, skip, list, append );
 		if( !out_d64 ) { ret = 1; }
 		else { ret = save( out_d64, out, D64_SIZE ); }
+	} else if( !data_d64 ) {
+		printf("Failed to open data disk file \"%s\"\n", data );
+		ret = 1;
+	} else if( !dir_d64 ) {
+		printf("Failed to open directory disk file \"%s\"\n", dir );
+		ret = 1;
+	} else if( data_size != D64_SIZE ) {
+		printf( "Data d64 file \"%s\" is not a standard size (%d bytes)\n", data, D64_SIZE );
+		ret = 1;
+	} else if( data_size != D64_SIZE ) {
+		printf( "Directory d64 file \"%s\" is not a standard size (%d bytes)\n", dir, D64_SIZE );
+		ret = 1;
 	}
 
 	if( data_d64 ) { free(data_d64); }
