@@ -206,7 +206,7 @@ int main( int argc, char* argv[] )
 
 	if( !data || !dir || !out )
 	{
-		printf("usage:\n%s [-skip=x] <d64 data> <d64 dir> <d64 out>\n", argv[0] );
+		printf("usage:\n%s [-skip=x] [-append] [-list] <d64 data> <d64 dir> <d64 out>\n", argv[0] );
 		printf("Notes:\n* .d64 files all need different names\n* .d64 dir should have more files than d64 data.\n");
 		return 0;
 	}
