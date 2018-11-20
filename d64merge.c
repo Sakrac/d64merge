@@ -53,7 +53,7 @@ int fileCount( u8* d64, int list )
 	return numFiles;
 }
 
-u8* d64Merge( u8* data, u8* dir, int skip, int list, int append )
+u8* d64Merge( u8* data, u8* dir, int skip, int list, int append, int first_index )
 {
 	if( list ) { printf( "\nFILES IN DATA:\n" ); }
 	int files_in_data = fileCount(data, list);
@@ -93,10 +93,10 @@ u8* d64Merge( u8* data, u8* dir, int skip, int list, int append )
 	u8* dir_file = 0;
 
 	int data_files_left = files_in_data;
-
+	(void)first_index;
 	if( list ) { printf( "\nFILES IN OUTPUT D64:\n" ); }
 	// only update files from the data directory
-	int first = 1;
+	int first = first_index+1;
 	while( currFile < files_in_dir ) {
 		if( data_files_left ) {
 			if( !skip || first ) {
@@ -124,7 +124,7 @@ u8* d64Merge( u8* data, u8* dir, int skip, int list, int append )
 		// the out file is relative to the dir d64
 		u8* out_file = out + ( dir_file - dir );
 
-		if( data_file && ( !skip || first ) ) {
+		if( data_file && ( !skip || first==1 ) ) {
 			if( append ) {
 				int shift = 0;
 				for( int i=0; i<16 && data_file[5+i]!=0xa0 && (dir_file[20-i]&0x7f)==0x20; i++ ) { shift++; }
@@ -133,13 +133,13 @@ u8* d64Merge( u8* data, u8* dir, int skip, int list, int append )
 			// copy the file info from the data file into the out file
 			memcpy( out_file+2, data_file+2, 3 );
 			memcpy( out_file + 21, data_file + 21, 11 );
-
+			if( first == 1 ) { memcpy( out_file + 5, data_file + 5, 16 ); }
 			// first filename entirely from dir art disk
 			if(currFile && !first) {
 				for(int i = 5; i<21 && data_file[i] != 0xa0; ++i ) { out_file[i] = data_file[i]; }
 			}
 		} else {
-			out_file[2] = 0x80; // make sure remaining files are all DEL
+			out_file[ 2 ] = 0x80; // make sure remaining files are all DEL
 			out_file[3] = 0x00;
 			out_file[4] = 0x00;
 			memset( out_file + 21, 0, 11 );
@@ -147,7 +147,7 @@ u8* d64Merge( u8* data, u8* dir, int skip, int list, int append )
 		if( list ) { printFile( out_file ); }
 		++currFile;
 		if( skip ) { --skip; }
-		first = 0;
+		if( first ) { --first; }
 	}
 	return out;
 }
@@ -184,7 +184,7 @@ int save( void* buf, const char* filename, size_t size )
 int main( int argc, char* argv[] )
 {
 	// parse command line arguments
-	int skip = 0, list = 0, append = 0;
+	int skip = 0, list = 0, append = 0, first = 0;
 	const char *data = 0, *dir = 0, *out = 0;
 	for( int i = 1; i < argc; ++i ) {
 		if( argv[ i ][ 0 ] == '-' ) {
@@ -192,6 +192,7 @@ int main( int argc, char* argv[] )
 			const char* eq = strchr( cmd, '=' );
 			size_t len = eq ? ( eq - cmd ) : strlen( cmd );
 			if( _strnicmp( "skip", cmd, len ) == 0 && eq ) { skip = atoi(eq+1); }
+			else if( _strnicmp( "first", cmd, len ) == 0 && eq ) { first = atoi(eq+1); }
 			else if( _strnicmp( "list", cmd, len ) == 0 ) { list = 1; }
 			else if( _strnicmp( "append", cmd, len ) == 0 ) { append = eq ? atoi(eq+1) : 1; }
 		}
@@ -206,13 +207,13 @@ int main( int argc, char* argv[] )
 
 	if( !data || !dir || !out )
 	{
-		printf("usage:\n%s [-skip=x] [-append] [-list] <d64 data> <d64 dir> <d64 out>\n", argv[0] );
+		printf("usage:\n%s [-skip=x] [-first=x] [-append] [-list] <d64 data> <d64 dir> <d64 out>\n", argv[0] );
 		printf("Notes:\n* .d64 files all need different names\n* .d64 dir should have more files than d64 data.\n");
 		return 0;
 	}
 
-	printf("Files names from \"%s\" will be padded with corresponding file names from\n \"%s\"\n and saved out as a new disk named\n \"%s\".\n",
-			data, dir, out );
+	printf("Files names from \"%s\" will be padded with corresponding file names from\n \"%s\"\n and saved out as a new disk named\n \"%s\".\nPut first file in target index %d.\n",
+			data, dir, out, first );
 
 	size_t data_size, dir_size;
 
@@ -223,7 +224,7 @@ int main( int argc, char* argv[] )
 	int ret = 0;
 
 	if( data_d64 && dir_d64 && data_size == D64_SIZE && dir_size == D64_SIZE ) {
-		out_d64 = d64Merge( data_d64, dir_d64, skip, list, append );
+		out_d64 = d64Merge( data_d64, dir_d64, skip, list, append, first );
 		if( !out_d64 ) { ret = 1; }
 		else { ret = save( out_d64, out, D64_SIZE ); }
 	} else if( !data_d64 ) {
