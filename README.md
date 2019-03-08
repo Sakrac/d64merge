@@ -2,7 +2,14 @@
 Merge filenames from a 1541 data disk with a corresponding art disk. For use with lovingly crafted DirArt d64s to easily apply to d64 disks with boringly named files.
 
 Usage:
-d64merge.exe \<d64 data\> \<d64 dir\> \<d64 out\>
+d64merge.exe \<optional switches\> \<d64 data\> \<d64 dir\> \<d64 out\>
+
+Optional Switches:
+* -skip=n Don't assign data files to directory n files after the first entry
+* -first=n Set first file at index n
+* -list Show directory of data, dir and result
+* -append Append the dir name after the data name instead of overwriting initial part of dir name with data name
+* -chain Print the track/sector sequence for the directory and each file.
 
 Notes:
 * data / dir / out need to be different files
