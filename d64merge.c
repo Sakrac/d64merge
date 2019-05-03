@@ -5,6 +5,7 @@
 
 #define D64_SIZE 174848
 #define D64_FILE_ENTRY_SIZE 32
+#define D64_MAX_FILES 256
 typedef unsigned char u8;
 
 static const int TrackOffsets[] = {
@@ -64,8 +65,8 @@ int fileCount( u8* d64, int list, int chain )
 		curr = d64 + d64Sector( curr[0], curr[1] );
 		u8* file = curr;
 		while( ( file - curr ) < 256 ) {
+			if( list ) { printFile( file ); }
 			if( file[2] ) { // type == 0 => "deleted"
-				if( list ) { printFile( file ); }
 				if( chain && (file[2]&7) ) { d64FileChain( d64, file[3], file[4] ); }
 				++numFiles;
 			}
@@ -73,6 +74,74 @@ int fileCount( u8* d64, int list, int chain )
 		}
 	}
 	return numFiles;
+}
+
+void d64RemoveDeleted( u8* d64 )
+{
+	u8* fileRefs[D64_MAX_FILES];
+	u8* sectRefs[D64_MAX_FILES];
+
+	u8* curr = d64 + d64Sector( 18, 0 );
+	size_t numRefs = 0;
+	size_t numReal = 0;
+	while( curr[ 0 ] && numRefs < D64_MAX_FILES ) {
+		curr = d64 + d64Sector( curr[ 0 ], curr[ 1 ] );
+		u8* file = curr;
+		while( ( file - curr ) < 256 && numRefs < D64_MAX_FILES ) {
+			sectRefs[ numRefs ]  = curr;
+			fileRefs[ numRefs++ ] = file;
+			if( file[2] ) { numReal++; }
+			file += D64_FILE_ENTRY_SIZE;
+		}
+	}
+
+	size_t currRef = 0;
+	curr = d64 + d64Sector( 18, 0 );
+	u8* lastSector = curr;
+	while( curr[ 0 ] && currRef < numReal ) {
+		curr = d64 + d64Sector( curr[ 0 ], curr[ 1 ] );
+		u8* file = curr;
+		while( ( file - curr ) < 256 ) {
+			if( file[ 2 ] ) {
+				printf( "%2d: ", (int)currRef );
+				memcpy( fileRefs[currRef++] + 2, file + 2, 32-2 );
+				printFile( fileRefs[currRef-1] );
+
+				if( currRef == numReal ) {
+					file = fileRefs[ currRef-1 ];
+					curr = sectRefs[ currRef-1 ];
+					lastSector = curr;
+					file += D64_FILE_ENTRY_SIZE;
+					while( ( file - curr ) < 256 && numRefs < D64_MAX_FILES ) {
+						memset( file + 2, 0, D64_FILE_ENTRY_SIZE - 2 );
+						file += D64_FILE_ENTRY_SIZE;
+					}
+					break;
+				}
+
+			}
+			file += D64_FILE_ENTRY_SIZE;
+
+		}
+	}
+
+	// ok, really destroy remaining files...
+	u8* bam = d64 + d64Sector( 18, 0 ) + 4;
+	u8 nextTrack = lastSector[ 0 ];
+	u8 nextSector = lastSector[ 1 ];
+	lastSector[ 0 ] = 0;
+	lastSector[ 1 ] = 0;
+	while( nextTrack && nextSector ) {
+		int bamBit = nextTrack * 32 + SectorsPerTrack[ nextTrack ] - nextSector - 1;
+		bam[ bamBit >> 3 ] |= 1 << ( bamBit & 7 );
+		u8* sector = d64 + d64Sector( nextTrack, nextSector );
+		nextTrack = sector[ 0 ];
+		nextSector = sector[ 1 ];
+		sector[0] = 0;
+		sector[1] = 0;
+	}
+
+
 }
 
 
@@ -253,6 +322,7 @@ int main( int argc, char* argv[] )
 	int ret = 0;
 
 	if( data_d64 && dir_d64 && data_size == D64_SIZE && dir_size == D64_SIZE ) {
+		d64RemoveDeleted( dir_d64 );
 		out_d64 = d64Merge( data_d64, dir_d64, skip, list, append, first, chain );
 		if( !out_d64 ) { ret = 1; }
 		else { ret = save( out_d64, out, D64_SIZE ); }
