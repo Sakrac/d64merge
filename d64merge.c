@@ -132,16 +132,13 @@ void d64RemoveDeleted( u8* d64 )
 	lastSector[ 0 ] = 0;
 	lastSector[ 1 ] = 0;
 	while( nextTrack && nextSector ) {
-		int bamBit = nextTrack * 32 + SectorsPerTrack[ nextTrack ] - nextSector - 1;
+		int bamBit = nextTrack * 32 + nextSector;
 		bam[ bamBit >> 3 ] |= 1 << ( bamBit & 7 );
 		u8* sector = d64 + d64Sector( nextTrack, nextSector );
 		nextTrack = sector[ 0 ];
 		nextSector = sector[ 1 ];
-		sector[0] = 0;
-		sector[1] = 0;
+		memset( sector, 0, 256 );
 	}
-
-
 }
 
 
