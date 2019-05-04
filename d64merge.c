@@ -78,69 +78,59 @@ int fileCount( u8* d64, int list, int chain )
 
 void d64RemoveDeleted( u8* d64 )
 {
-	u8* fileRefs[D64_MAX_FILES];
-	u8* sectRefs[D64_MAX_FILES];
+	// dir header
+	u8* read_sector = d64 + d64Sector( 18, 0 );
 
-	u8* curr = d64 + d64Sector( 18, 0 );
-	size_t numRefs = 0;
-	size_t numReal = 0;
-	while( curr[ 0 ] && numRefs < D64_MAX_FILES ) {
-		curr = d64 + d64Sector( curr[ 0 ], curr[ 1 ] );
-		u8* file = curr;
-		while( ( file - curr ) < 256 && numRefs < D64_MAX_FILES ) {
-			sectRefs[ numRefs ]  = curr;
-			fileRefs[ numRefs++ ] = file;
-			if( file[2] ) { numReal++; }
-			file += D64_FILE_ENTRY_SIZE;
-		}
-	}
+	// first file reference
+	read_sector = d64 + d64Sector( read_sector[ 0 ], read_sector[ 1 ] );
+	u8* write_sector = read_sector;
+	u8* read_file = read_sector;
+	u8* write_file = write_sector;
 
-	size_t currRef = 0;
-	curr = d64 + d64Sector( 18, 0 );
-	u8* lastSector = curr;
-	while( curr[ 0 ] && currRef < numReal ) {
-		curr = d64 + d64Sector( curr[ 0 ], curr[ 1 ] );
-		u8* file = curr;
-		while( ( file - curr ) < 256 ) {
-			if( file[ 2 ] ) {
-				printf( "%2d: ", (int)currRef );
-				memcpy( fileRefs[currRef++] + 2, file + 2, 32-2 );
-				printFile( fileRefs[currRef-1] );
+	u8* last_sector = write_sector;
 
-				if( currRef == numReal ) {
-					file = fileRefs[ currRef-1 ];
-					curr = sectRefs[ currRef-1 ];
-					lastSector = curr;
-					file += D64_FILE_ENTRY_SIZE;
-					while( ( file - curr ) < 256 && numRefs < D64_MAX_FILES ) {
-						memset( file + 2, 0, D64_FILE_ENTRY_SIZE - 2 );
-						file += D64_FILE_ENTRY_SIZE;
-					}
-					break;
+	// step through file reference sectors until next track is 0
+	for(;;) {
+		while( (read_file - read_sector < 256) ) {
+			if( read_file[ 2 ] ) {
+				if( read_file != write_file ) {
+					memcpy( write_file + 2, read_file + 2, D64_FILE_ENTRY_SIZE - 2 );
 				}
-
+				write_file += D64_FILE_ENTRY_SIZE;
+				last_sector = write_sector;
+				if( (write_file - write_sector) >= 256 ) {
+					write_sector = d64 + d64Sector( write_sector[ 0 ], write_sector[ 1 ] );
+					write_file = write_sector;
+				}
 			}
-			file += D64_FILE_ENTRY_SIZE;
-
+			read_file += D64_FILE_ENTRY_SIZE;
 		}
+		if( !read_sector[ 0 ] ) { break; }
+		read_sector = d64 + d64Sector( read_sector[ 0 ], read_sector[ 1 ] );
 	}
 
-	// ok, really destroy remaining files...
-	u8* bam = d64 + d64Sector( 18, 0 ) + 4;
-	u8 nextTrack = lastSector[ 0 ];
-	u8 nextSector = lastSector[ 1 ];
-	lastSector[ 0 ] = 0;
-	lastSector[ 1 ] = 0;
-	while( nextTrack && nextSector ) {
-		int bamBit = nextTrack * 32 + nextSector;
-		bam[ bamBit >> 3 ] |= 1 << ( bamBit & 7 );
-		u8* sector = d64 + d64Sector( nextTrack, nextSector );
-		nextTrack = sector[ 0 ];
-		nextSector = sector[ 1 ];
-		memset( sector, 0, 256 );
+	// clear the remaining file entries for the last remaining write sector
+	if( last_sector == write_sector ) {
+		size_t bytes_left = 256 - (write_file - write_sector);
+		memset( write_file, 0, bytes_left );
+	}
+
+	if( last_sector[ 0 ] ) {
+		u8* bam = d64 + d64Sector( 18, 0 ) + 4;
+		u8 nextTrack = last_sector[ 0 ];
+		u8 nextSector = last_sector[ 1 ];
+		last_sector[ 0 ] = 0;
+		last_sector[ 1 ] = 0;
+		while( nextTrack && nextSector ) {
+			int bamBit = nextTrack * 32 + nextSector;
+			bam[ bamBit >> 3 ] |= 1 << (bamBit & 7);
+			u8* clear_sector = d64 + d64Sector( nextTrack, nextSector );
+			nextTrack = clear_sector[ 0 ];
+			nextSector = clear_sector[ 1 ];
+			memset( clear_sector, 0, 256 );
+		}
 	}
 }
-
 
 u8* d64Merge( u8* data, u8* dir, int skip, int list, int append, int first_index, int chain )
 {
