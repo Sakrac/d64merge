@@ -5,7 +5,6 @@
 
 #define D64_SIZE 174848
 #define D64_FILE_ENTRY_SIZE 32
-#define D64_MAX_FILES 256
 typedef unsigned char u8;
 
 static const int TrackOffsets[] = {
@@ -17,16 +16,6 @@ static const int TrackOffsets[] = {
 	0x2AB00, 0x2BC00, 0x2CD00, 0x2DE00, 0x2EF00
 };
 
-static const int SectorsPerTrack[] = {
-	21, 21, 21, 21, 21, 21, 21, 21,
-	21, 21, 21, 21, 21, 21, 21, 21,
-	21,
-	19, 19, 19, 19, 19, 19, 19,
-	18, 18, 18, 18, 18, 18,
-	17, 17, 17, 17, 17, 17, 17, 17,
-	17, 17
-};
-
 static const char* FileTypes[] = {
 	"DEL", "SEQ", "PRG", "USR", "REL", "???", "???", "???"
 };
@@ -36,17 +25,6 @@ int d64Sector( u8 track, u8 sector )
 	return TrackOffsets[ track-1 ] + 256 * (int)sector;
 }
 
-void d64FileChain( u8* data, u8 track, u8 sector )
-{
-	while( track && track <= 40 && sector < SectorsPerTrack[ track-1 ] ) {
-		u8* block = data + d64Sector( track, sector );
-		printf( "%d, %d", track, sector );
-		if( block[ 0 ] ) { printf( " -> " ); }
-		else { printf( "\n" ); }
-		track = block[ 0 ];
-		sector = block[ 1 ];
-	}
-}
 
 void printFile( u8* file )
 {
@@ -57,7 +35,7 @@ void printFile( u8* file )
 	printf( "\"%s\" %s\n", name, FileTypes[ type & 7 ] );
 }
 
-int fileCount( u8* d64, int list, int chain )
+int fileCount( u8* d64, int list )
 {
 	int numFiles = 0;
 	u8* curr = d64 + d64Sector( 18, 0 );
@@ -65,9 +43,8 @@ int fileCount( u8* d64, int list, int chain )
 		curr = d64 + d64Sector( curr[0], curr[1] );
 		u8* file = curr;
 		while( ( file - curr ) < 256 ) {
-			if( list ) { printFile( file ); }
 			if( file[2] ) { // type == 0 => "deleted"
-				if( chain && (file[2]&7) ) { d64FileChain( d64, file[3], file[4] ); }
+				if( list ) { printFile( file ); }
 				++numFiles;
 			}
 			file += D64_FILE_ENTRY_SIZE;
@@ -76,73 +53,12 @@ int fileCount( u8* d64, int list, int chain )
 	return numFiles;
 }
 
-void d64RemoveDeleted( u8* d64 )
-{
-	// dir header
-	u8* read_sector = d64 + d64Sector( 18, 0 );
-
-	// first file reference
-	read_sector = d64 + d64Sector( read_sector[ 0 ], read_sector[ 1 ] );
-	u8* write_sector = read_sector;
-	u8* read_file = read_sector;
-	u8* write_file = write_sector;
-
-	u8* last_sector = write_sector;
-
-	// step through file reference sectors until next track is 0
-	for(;;) {
-		while( (read_file - read_sector < 256) ) {
-			if( read_file[ 2 ] ) {
-				if( read_file != write_file ) {
-					memcpy( write_file + 2, read_file + 2, D64_FILE_ENTRY_SIZE - 2 );
-				}
-				write_file += D64_FILE_ENTRY_SIZE;
-				last_sector = write_sector;
-				if( (write_file - write_sector) >= 256 ) {
-					write_sector = d64 + d64Sector( write_sector[ 0 ], write_sector[ 1 ] );
-					write_file = write_sector;
-				}
-			}
-			read_file += D64_FILE_ENTRY_SIZE;
-		}
-		if( !read_sector[ 0 ] ) { break; }
-		read_sector = d64 + d64Sector( read_sector[ 0 ], read_sector[ 1 ] );
-	}
-
-	// clear the remaining file entries for the last remaining write sector
-	if( last_sector == write_sector ) {
-		size_t bytes_left = 256 - (write_file - write_sector);
-		memset( write_file, 0, bytes_left );
-	}
-
-	if( last_sector[ 0 ] ) {
-		u8* bam = d64 + d64Sector( 18, 0 ) + 4;
-		u8 nextTrack = last_sector[ 0 ];
-		u8 nextSector = last_sector[ 1 ];
-		last_sector[ 0 ] = 0;
-		last_sector[ 1 ] = 0;
-		while( nextTrack && nextSector ) {
-			int bamBit = nextTrack * 32 + nextSector;
-			bam[ bamBit >> 3 ] |= 1 << (bamBit & 7);
-			u8* clear_sector = d64 + d64Sector( nextTrack, nextSector );
-			nextTrack = clear_sector[ 0 ];
-			nextSector = clear_sector[ 1 ];
-			memset( clear_sector, 0, 256 );
-		}
-	}
-}
-
-u8* d64Merge( u8* data, u8* dir, int skip, int list, int append, int first_index, int chain )
+u8* d64Merge( u8* data, u8* dir, int skip, int list, int append, int first_index )
 {
 	if( list ) { printf( "\nFILES IN DATA:\n" ); }
-	int files_in_data = fileCount(data, list, chain);
+	int files_in_data = fileCount(data, list);
 	if( list ) { printf( "\nFILES IN DIR:\n" ); }
-	int files_in_dir = fileCount(dir, list, chain);
-
-	if( chain ) {
-		printf("\nCHAIN OF DIRECTORY:\n");
-		d64FileChain( data, 18, 1 );
-	}
+	int files_in_dir = fileCount(dir, list);
 
 	printf("Number of files in data d64: %d\nNumber of files in dir d64: %d\n", files_in_data, files_in_dir );
 
@@ -268,7 +184,7 @@ int save( void* buf, const char* filename, size_t size )
 int main( int argc, char* argv[] )
 {
 	// parse command line arguments
-	int skip = 0, list = 0, append = 0, first = 0, chain = 0;
+	int skip = 0, list = 0, append = 0, first = 0;
 	const char *data = 0, *dir = 0, *out = 0;
 	for( int i = 1; i < argc; ++i ) {
 		if( argv[ i ][ 0 ] == '-' ) {
@@ -279,7 +195,6 @@ int main( int argc, char* argv[] )
 			else if( _strnicmp( "first", cmd, len ) == 0 && eq ) { first = atoi(eq+1); }
 			else if( _strnicmp( "list", cmd, len ) == 0 ) { list = 1; }
 			else if( _strnicmp( "append", cmd, len ) == 0 ) { append = eq ? atoi(eq+1) : 1; }
-			else if( _strnicmp( "chain", cmd, len ) == 0 ) { chain = 1; }
 		}
 		else if( !data ) { data = argv[i]; }
 		else if( !dir ) { dir = argv[i]; }
@@ -309,8 +224,7 @@ int main( int argc, char* argv[] )
 	int ret = 0;
 
 	if( data_d64 && dir_d64 && data_size == D64_SIZE && dir_size == D64_SIZE ) {
-		d64RemoveDeleted( dir_d64 );
-		out_d64 = d64Merge( data_d64, dir_d64, skip, list, append, first, chain );
+		out_d64 = d64Merge( data_d64, dir_d64, skip, list, append, first );
 		if( !out_d64 ) { ret = 1; }
 		else { ret = save( out_d64, out, D64_SIZE ); }
 	} else if( !data_d64 ) {
